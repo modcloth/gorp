@@ -50,11 +50,11 @@ DSNs for these three databases.
 ## Installation ##
 
     # install the library:
-    go get github.com/coopernurse/gorp
+    go get github.com/modcloth/gorp
     
     // use in your .go code:
     import (
-        "github.com/coopernurse/gorp"
+        "github.com/modcloth/gorp"
     )
 
 ## Running the tests ##

@@ -7,7 +7,7 @@
 // compliant database/sql driver.
 //
 // Source code and project home:
-// https://github.com/coopernurse/gorp
+// https://github.com/modcloth/gorp
 //
 package gorp
 
@@ -521,8 +521,8 @@ type SqlExecutor interface {
 	Update(list ...interface{}) (int64, error)
 	Delete(list ...interface{}) (int64, error)
 	Exec(query string, args ...interface{}) (sql.Result, error)
-	Select(i interface{}, query string,
-		args ...interface{}) ([]interface{}, error)
+	Select(results interface{}, query string,
+		args ...interface{}) error
 	query(query string, args ...interface{}) (*sql.Rows, error)
 	queryRow(query string, args ...interface{}) *sql.Row
 }
@@ -738,23 +738,23 @@ func (m *DbMap) Get(i interface{}, keys ...interface{}) (interface{}, error) {
 	return get(m, m, i, keys...)
 }
 
-// Select runs an arbitrary SQL query, binding the columns in the result
-// to fields on the struct specified by i.  args represent the bind
+// Select runs an arbitrary SQL query, binding the columns in the result to
+// fields on the struct specified by i's element type.  args represent the bind
 // parameters for the SQL statement.
 //
-// Column names on the SELECT statement should be aliased to the field names
-// on the struct i. Returns an error if one or more columns in the result
-// do not match.  It is OK if fields on i are not part of the SQL
+// Column names on the SELECT statement should be aliased to the field names on
+// the struct i's element. Returns an error if one or more columns in the
+// result do not match.  It is OK if fields on i are not part of the SQL
 // statement.
 //
 // Hook function PostGet() will be executed
 // after the SELECT statement if the interface defines them.
 //
-// Returns a slice of pointers to matching rows of type i.
+// Fills in the slice of struct pointers, results.
 //
-// i does NOT need to be registered with AddTable()
-func (m *DbMap) Select(i interface{}, query string, args ...interface{}) ([]interface{}, error) {
-	return hookedselect(m, m, i, query, args...)
+// i's element type does NOT need to be registered with AddTable()
+func (m *DbMap) Select(results interface{}, query string, args ...interface{}) error {
+	return hookedselect(m, m, results, query, args...)
 }
 
 // Exec runs an arbitrary SQL statement.  args represent the bind parameters.
@@ -879,7 +879,7 @@ func (t *Transaction) Get(i interface{}, keys ...interface{}) (interface{}, erro
 }
 
 // Same behavior as DbMap.Select(), but runs in a transaction
-func (t *Transaction) Select(i interface{}, query string, args ...interface{}) ([]interface{}, error) {
+func (t *Transaction) Select(i interface{}, query string, args ...interface{}) error {
 	return hookedselect(t.dbmap, t, i, query, args...)
 }
 
@@ -1002,44 +1002,49 @@ func selectVal(e SqlExecutor, holder interface{}, query string, args ...interfac
 
 ///////////////
 
-func hookedselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
-	args ...interface{}) ([]interface{}, error) {
+func hookedselect(m *DbMap, exec SqlExecutor, results interface{}, query string,
+	args ...interface{}) error {
 
-	list, err := rawselect(m, exec, i, query, args...)
+	err := rawselect(m, exec, results, query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	for _, v := range list {
-		err = runHook("PostGet", reflect.ValueOf(v), hookArg(exec))
+	resultsValue := reflect.Indirect(reflect.ValueOf(results))
+
+	for i := 0; i < resultsValue.Len(); i++ {
+		v := resultsValue.Index(i)
+		err = runHook("PostGet", v, hookArg(exec))
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return list, nil
+	return nil
 }
 
-func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
-	args ...interface{}) ([]interface{}, error) {
+func rawselect(m *DbMap, exec SqlExecutor, results interface{}, query string,
+	args ...interface{}) error {
 
-	// get type for i, verifying it's a struct
-	t, err := toType(i)
+	// get type for i, verifying it's a slice of struct
+	t, err := toSliceType(results)
 	if err != nil {
-		return nil, err
+		return err
 	}
+
+	resultsValue := reflect.Indirect(reflect.ValueOf(results))
 
 	// Run the query
 	rows, err := exec.query(query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
 	// Fetch the column names as returned from db
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// check if type t is a mapped table - if so we'll
@@ -1085,19 +1090,17 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 		if colToFieldOffset[x] == -1 {
 			e := fmt.Sprintf("gorp: No field %s in type %s (query: %s)",
 				colName, t.Name(), query)
-			return nil, errors.New(e)
+			return errors.New(e)
 		}
 	}
 
 	conv := m.TypeConverter
 
-	list := make([]interface{}, 0)
-
 	for {
 		if !rows.Next() {
 			// if error occured return rawselect
 			if rows.Err() != nil {
-				return nil, rows.Err()
+				return rows.Err()
 			}
 			// time to exit from outer "for" loop
 			break
@@ -1122,20 +1125,20 @@ func rawselect(m *DbMap, exec SqlExecutor, i interface{}, query string,
 
 		err = rows.Scan(dest...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		for _, c := range custScan {
 			err = c.Bind()
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 
-		list = append(list, v.Interface())
+		resultsValue.Set(reflect.Append(resultsValue, v))
 	}
 
-	return list, nil
+	return nil
 }
 
 func fieldByName(val reflect.Value, fieldName string) *reflect.Value {
@@ -1160,6 +1163,35 @@ func fieldByName(val reflect.Value, fieldName string) *reflect.Value {
 	}
 
 	return nil
+}
+
+func toSliceType(i interface{}) (reflect.Type, error) {
+	t := reflect.TypeOf(i)
+
+	// If a Pointer to a type, follow
+	if t.Kind() != reflect.Ptr {
+		return nil, errors.New(fmt.Sprintf("gorp: Cannot SELECT into non-pointer to slice type: %v", reflect.TypeOf(i)))
+	}
+
+	t = t.Elem()
+
+	if t.Kind() != reflect.Slice {
+		return nil, errors.New(fmt.Sprintf("gorp: Cannot SELECT into non-slice type: %v", reflect.TypeOf(i)))
+	}
+
+	t = t.Elem()
+
+	if t.Kind() != reflect.Ptr {
+		return nil, errors.New(fmt.Sprintf("gorp: Cannot SELECT into slice of non-struct pointer type: %v", reflect.TypeOf(i)))
+	}
+
+	t = t.Elem()
+
+	if t.Kind() != reflect.Struct {
+		return nil, errors.New(fmt.Sprintf("gorp: Cannot SELECT into slice of non-struct type: %v", reflect.TypeOf(i)))
+	}
+
+	return t, nil
 }
 
 func toType(i interface{}) (reflect.Type, error) {

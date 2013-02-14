@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	. "github.com/coopernurse/gorp"
+	. "github.com/modcloth/gorp"
 	_ "github.com/ziutek/mymysql/godrv"
 	"log"
 	"os"
@@ -261,6 +261,7 @@ func TestColumnPropsTagged(t *testing.T) {
 }
 
 func TestRawSelectTagged(t *testing.T) {
+	var list []*InvoiceTaggedPersonTaggedView
 	dbmap := initDbMapTagged()
 	defer dbmap.DropTables()
 
@@ -275,7 +276,7 @@ func TestRawSelectTagged(t *testing.T) {
 	query := "select i.Id_tagged InvoiceTaggedId_tagged, p.Id_tagged PersonTaggedId_tagged, i.Memo_tagged, p.FName_tagged " +
 		"from invoice_test_tagged i, person_test_tagged p " +
 		"where i.PersonTaggedId_tagged = p.Id_tagged"
-	list := rawselect(dbmap, InvoiceTaggedPersonTaggedView{}, query)
+	rawselect(dbmap, &list, query)
 	if len(list) != 1 {
 		t.Errorf("len(list) != 1: %d", len(list))
 	} else if !reflect.DeepEqual(expected, list[0]) {

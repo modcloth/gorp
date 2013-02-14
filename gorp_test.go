@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/bmizerany/pq"
-	. "github.com/coopernurse/gorp"
 	_ "github.com/mattn/go-sqlite3"
+	. "github.com/modcloth/gorp"
 	_ "github.com/ziutek/mymysql/godrv"
 	"log"
 	"os"
@@ -171,12 +171,15 @@ type PersistentUser struct {
 }
 
 func TestPersistentUser(t *testing.T) {
+	var arr []*PersistentUser
+
 	dbmap := &DbMap{Db: connect(), Dialect: dialect}
 	dbmap.Exec("drop table if exists PersistentUser")
 	dbmap.TraceOn("", log.New(os.Stdout, "gorptest: ", log.Lmicroseconds))
 	table := dbmap.AddTable(PersistentUser{}).SetKeys(false, "Key")
 	table.ColMap("Key").Rename("mykey")
 	err := dbmap.CreateTables()
+
 	if err != nil {
 		panic(err)
 	}
@@ -196,7 +199,7 @@ func TestPersistentUser(t *testing.T) {
 		t.Errorf("%v!=%v", pu, pu2)
 	}
 
-	arr, err := dbmap.Select(pu, "select * from PersistentUser")
+	err = dbmap.Select(&arr, "select * from PersistentUser")
 	if err != nil {
 		panic(err)
 	}
@@ -354,6 +357,7 @@ func TestColumnProps(t *testing.T) {
 }
 
 func TestRawSelect(t *testing.T) {
+	var list []*InvoicePersonView
 	dbmap := initDbMap()
 	defer dbmap.DropTables()
 
@@ -368,7 +372,7 @@ func TestRawSelect(t *testing.T) {
 	query := "select i.Id InvoiceId, p.Id PersonId, i.Memo, p.FName " +
 		"from invoice_test i, person_test p " +
 		"where i.PersonId = p.Id"
-	list := rawselect(dbmap, InvoicePersonView{}, query)
+	rawselect(dbmap, &list, query)
 	if len(list) != 1 {
 		t.Errorf("len(list) != 1: %d", len(list))
 	} else if !reflect.DeepEqual(expected, list[0]) {
@@ -843,10 +847,9 @@ func rawexec(dbmap *DbMap, query string, args ...interface{}) sql.Result {
 	return res
 }
 
-func rawselect(dbmap *DbMap, i interface{}, query string, args ...interface{}) []interface{} {
-	list, err := dbmap.Select(i, query, args...)
+func rawselect(dbmap *DbMap, i interface{}, query string, args ...interface{}) {
+	err := dbmap.Select(i, query, args...)
 	if err != nil {
 		panic(err)
 	}
-	return list
 }
